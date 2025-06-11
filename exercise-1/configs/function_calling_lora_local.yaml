@@ -1,0 +1,111 @@
+# LoRA fine-tuning configuration for local Apple Silicon execution
+# Optimized for MacBook with Apple Silicon (M1/M2/M3/M4)
+
+# Reproducibility
+seed: 42
+
+# Tokenizer - Update this path to your local model
+tokenizer:
+  _component_: torchtune.models.llama3.llama3_tokenizer
+  path: ./models/Meta-Llama-3.2-1B-Instruct/original/tokenizer.model
+  
+# Model Arguments - LoRA configuration for function calling
+model:
+  _component_: torchtune.models.llama3_2.lora_llama3_2_1b
+  lora_attn_modules: ['q_proj', 'v_proj']  # Standard attention modules
+  apply_lora_to_mlp: False  # Simpler LoRA setup for local training
+  apply_lora_to_output: False  # Simpler LoRA setup for local training
+  lora_rank: 4  # Reduced from 8 for lower memory usage
+  lora_alpha: 8  # Reduced proportionally
+  
+# Checkpointer - Update paths to your local model directory
+checkpointer:
+  _component_: torchtune.training.FullModelHFCheckpointer
+  checkpoint_dir: ./models/Meta-Llama-3.2-1B-Instruct/
+  checkpoint_files: [
+    model.safetensors
+  ]
+  recipe_checkpoint: null
+  output_dir: ./checkpoints/
+  model_type: LLAMA3
+
+resume_from_checkpoint: False
+
+# Dataset Configuration - Updated to use NousResearch/hermes-function-calling-v1
+dataset:
+  _component_: torchtune.datasets.chat_dataset
+  source: NousResearch/hermes-function-calling-v1
+  name: func_calling_singleturn  # Using the single-turn function calling configuration
+  split: train
+  conversation_column: conversations
+  conversation_style: sharegpt
+  train_on_input: False  # Only train on assistant responses
+  
+# Data Loading - Optimized for local execution
+shuffle: True
+batch_size: 1  # Very small batch size for local training
+
+# Training parameters - Reduced for local testing
+epochs: 1
+max_steps_per_epoch: 10  # Small number for testing
+gradient_accumulation_steps: 4  # Simulate larger batch through accumulation
+max_seq_len: 1024  # Reduced sequence length for memory efficiency
+
+dataloader:
+  _component_: torch.utils.data.DataLoader
+  batch_size: 1  # Small batch size for Apple Silicon
+  shuffle: True
+  num_workers: 2  # Reduced for Mac
+  pin_memory: False  # Disabled for Mac compatibility
+  drop_last: True
+
+# Device configuration - CPU for compatibility
+device: cpu  # Use CPU for maximum compatibility
+
+# Optimizer and Scheduler
+optimizer:
+  _component_: torch.optim.AdamW
+  weight_decay: 0.01
+  lr: 5e-4  # Slightly higher LR for smaller batch size
+  betas: [0.9, 0.95]
+  eps: 1e-8
+  
+lr_scheduler:
+  _component_: torchtune.training.lr_schedulers.get_cosine_schedule_with_warmup
+  num_warmup_steps: 10  # Reduced warmup steps
+  
+# Loss function
+loss:
+  _component_: torch.nn.CrossEntropyLoss
+  
+# Training Configuration
+gradient_clipping: 1.0
+
+# Evaluation - Simplified for local testing
+eval_every_n_epochs: 1
+eval_dataset:
+  _component_: torchtune.datasets.chat_dataset
+  source: NousResearch/hermes-function-calling-v1
+  name: func_calling_singleturn  # Using the same configuration for evaluation
+  split: train
+  conversation_column: conversations
+  conversation_style: sharegpt
+  train_on_input: False
+
+# Memory and Performance Optimizations - Mac friendly
+enable_activation_checkpointing: False  # Disabled for simplicity
+compile: False  # Disabled to avoid potential Mac issues
+dtype: fp32  # Use fp32 for Apple Silicon compatibility
+
+# Output and Logging
+output_dir: ./lora_finetune_output
+metric_logger:
+  _component_: torchtune.training.metric_logging.DiskLogger
+  log_dir: ./logs  # Changed from WandB to local logging
+  
+log_every_n_steps: 2
+log_peak_memory_stats: True  # Enabled for CPU compatibility
+
+# Checkpointing - More frequent for testing
+save_every_n_epochs: 1
+checkpoint_every_n_steps: 5 

@@ -1,0 +1,94 @@
+# Multi-node fine-tuning of Llama 3.1 8B for function calling
+# Usage: sky launch function-calling-finetune.yaml -c llama-function-calling --env HF_TOKEN --env WANDB_API_KEY
+
+num_nodes: 2
+
+envs:
+  MODEL_SIZE: 8B
+  HF_TOKEN: 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
+  WANDB_API_KEY: d44d3113a400bd51481db0ff702e3f03f7ed312b
+  DATASET: "NousResearch/hermes-function-calling-v1"
+  MAX_SAMPLES: 1500  # Subset for PoC - hermes dataset has ~1.89k samples in func_calling_singleturn
+  
+resources:
+  cloud: kubernetes
+  accelerators: H100:8
+
+# Mount shared filesystem for model storage and checkpoints
+config:
+  kubernetes:
+    pod_config:
+      spec:
+        containers:
+          - volumeMounts:
+              - mountPath: /mnt/shared
+                name: shared-volume
+        volumes:
+          - name: shared-volume
+            hostPath:
+              path: /mnt/data
+              type: Directory
+
+file_mounts:
+  /workspace/configs/function_calling_lora.yaml: ./configs/function_calling_lora.yaml
+
+setup: |
+  # Install dependencies
+  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+  pip install torchao --index-url https://download.pytorch.org/whl/nightly/cu121
+  pip install --upgrade torchtune wandb datasets transformers accelerate
+  
+  # Download base model (only on rank 0 node)
+  if [ "$SKYPILOT_NODE_RANK" = "0" ] || [ -z "$SKYPILOT_NODE_RANK" ]; then
+    tune download meta-llama/Meta-Llama-3.1-${MODEL_SIZE}-Instruct \
+      --hf-token $HF_TOKEN \
+      --output-dir /mnt/shared/models/Meta-Llama-3.1-${MODEL_SIZE}-Instruct \
+      --ignore-patterns "original/consolidated*" 
+  fi
+  
+  
+
+run: |
+  # Initialize Weights & Biases (only on rank 0)
+  if [ "$SKYPILOT_NODE_RANK" = "0" ]; then
+    wandb login $WANDB_API_KEY
+  fi
+  
+  # Debug environment variables
+  echo "SKYPILOT_NODE_RANK: $SKYPILOT_NODE_RANK"
+  echo "SKYPILOT_NODE_IPS: $SKYPILOT_NODE_IPS"
+  
+  # Get head node IP for distributed training - more robust extraction
+  if [ -n "$SKYPILOT_NODE_IPS" ]; then
+    HEAD_NODE_IP=$(echo "$SKYPILOT_NODE_IPS" | tr ',' '\n' | head -1 | tr -d ' ')
+  else
+    # Fallback: use the first IP from hostname resolution
+    HEAD_NODE_IP=$(hostname -I | awk '{print $1}')
+  fi
+  
+  echo "HEAD_NODE_IP: $HEAD_NODE_IP"
+  
+  # Start distributed fine-tuning using tune CLI
+  export MASTER_ADDR="$HEAD_NODE_IP"
+  export MASTER_PORT="29500"
+  export WORLD_SIZE=$(($SKYPILOT_NUM_NODES * $SKYPILOT_NUM_GPUS_PER_NODE))
+  export NODE_RANK="$SKYPILOT_NODE_RANK"
+  
+  tune run --nnodes "$SKYPILOT_NUM_NODES" --nproc_per_node "$SKYPILOT_NUM_GPUS_PER_NODE" \
+    --rdzv_id="$SKYPILOT_TASK_ID" \
+    --rdzv_backend="c10d" \
+    --rdzv_endpoint="$HEAD_NODE_IP:29500" \
+    lora_finetune_distributed \
+    --config /workspace/configs/function_calling_lora.yaml \
+    dataset.source=$DATASET
+  
+  # Save final model to shared storage (only on rank 0)
+  if [ "$SKYPILOT_NODE_RANK" = "0" ]; then
+    mkdir -p /mnt/shared/checkpoints/function-calling-final
+    if [ -d "/tmp/lora_finetune_output" ]; then
+      cp -r /tmp/lora_finetune_output/* /mnt/shared/checkpoints/function-calling-final/
+      echo "Fine-tuning completed! Model saved to /mnt/shared/checkpoints/function-calling-final"
+    else
+      echo "Warning: No output directory found at /tmp/lora_finetune_output"
+    fi
+  fi

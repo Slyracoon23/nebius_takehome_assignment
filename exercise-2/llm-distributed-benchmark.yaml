@@ -1,0 +1,58 @@
+name: llm-distributed-benchmark
+
+resources:
+  image_id: docker:nvcr.io/nvidia/pytorch:24.07-py3
+  accelerators: H100:8
+  cloud: kubernetes
+  
+num_nodes: 1  # Using 1 node for distributed training
+
+file_mounts:
+  /app: .  # Mount the current directory to /app
+
+# Mount shared filesystem for model storage and checkpoints
+config:
+  kubernetes:
+    pod_config:
+      spec:
+        containers:
+          - volumeMounts:
+              - mountPath: /mnt/shared
+                name: shared-volume
+        volumes:
+          - name: shared-volume
+            hostPath:
+              path: /mnt/data
+              type: Directory
+
+setup: |
+  # Make scripts executable
+  chmod +x /app/llm_distributed_benchmark.py
+  chmod +x /app/run_benchmarks.sh
+  
+  # Create symbolic links in the shared directory for multi-node access
+  ln -sf /app/llm_distributed_benchmark.py /mnt/shared/
+  ln -sf /app/run_benchmarks.sh /mnt/shared/
+
+run: |
+  echo "===== Starting Distributed LLM Training Benchmark ====="
+  
+  # Since SkyPilot tasks are run inside a fresh conda "(base)" environment,
+  # deactivate first to access what the Docker image has already installed.
+  source deactivate
+  
+  # Show GPU info
+  echo "===== GPU Information ====="
+  nvidia-smi
+  
+  # Show PyTorch version
+  echo "===== PyTorch Version ====="
+  python -c 'import torch; print(f"PyTorch version: {torch.__version__}"); print(f"CUDA available: {torch.cuda.is_available()}"); print(f"CUDA version: {torch.version.cuda}"); print(f"GPU count: {torch.cuda.device_count()}")'
+  
+  # Install required packages
+  echo "===== Installing Requirements ====="
+  pip install transformers
+  
+  # Run the benchmark script
+  cd /app
+  ./run_benchmarks.sh

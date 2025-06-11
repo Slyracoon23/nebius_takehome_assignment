@@ -1,0 +1,116 @@
+# LoRA fine-tuning configuration for Alpaca dataset
+# Optimized for 16 H100 GPUs (2 nodes x 8 GPUs)
+
+# Reproducibility
+seed: 42
+
+# Tokenizer
+tokenizer:
+  _component_: torchtune.models.llama3.llama3_tokenizer
+  path: /mnt/shared/models/Meta-Llama-3.1-8B-Instruct/original/tokenizer.model
+  
+# Model Arguments - LoRA configuration for function calling
+model:
+  _component_: torchtune.models.llama3_1.lora_llama3_1_8b
+  lora_attn_modules: ['q_proj', 'v_proj']  # Standard attention modules
+  apply_lora_to_mlp: False  # Simpler LoRA setup
+  apply_lora_to_output: False  # Simpler LoRA setup
+  lora_rank: 8  # Standard rank for general fine-tuning
+  lora_alpha: 16  # Standard alpha
+  
+# Checkpointer
+checkpointer:
+  _component_: torchtune.training.FullModelHFCheckpointer
+  checkpoint_dir: /mnt/shared/models/Meta-Llama-3.1-8B-Instruct/
+  checkpoint_files: [
+    model-00001-of-00004.safetensors,
+    model-00002-of-00004.safetensors,
+    model-00003-of-00004.safetensors,
+    model-00004-of-00004.safetensors
+  ]
+  recipe_checkpoint: null
+  output_dir: /mnt/shared/checkpoints/
+  model_type: LLAMA3
+
+resume_from_checkpoint: False
+
+# Dataset Configuration - Updated to use NousResearch/hermes-function-calling-v1
+dataset:
+  _component_: torchtune.datasets.chat_dataset
+  source: NousResearch/hermes-function-calling-v1
+  name: func_calling_singleturn  # Using the single-turn function calling configuration
+  split: train
+  conversation_column: conversations  # The correct column name in hermes dataset
+  conversation_style: sharegpt
+  train_on_input: False  # Only train on assistant responses
+  
+# Data Loading - Root level parameters required by distributed recipe
+shuffle: True  # Required at root level for distributed recipe
+batch_size: 4  # Required at root level for distributed recipe
+
+# Training parameters - Also required at root level 
+epochs: 1  # Reduced from 3 to 1 epoch
+max_steps_per_epoch: 10  # Limit to ~10% of current steps (was 101, now ~10)
+gradient_accumulation_steps: 8  # Required at root level for distributed recipe
+max_seq_len: 4096  # Required at root level for distributed recipe
+
+dataloader:
+  _component_: torch.utils.data.DataLoader
+  batch_size: 4  # Increased for 16 H100 GPUs
+  shuffle: True
+  num_workers: 8
+  pin_memory: True
+  drop_last: True
+
+# Device configuration - torchrun will handle distributed setup
+device: cuda
+
+# Optimizer and Scheduler
+optimizer:
+  _component_: torch.optim.AdamW
+  weight_decay: 0.01
+  lr: 3e-4  # Standard learning rate for LoRA fine-tuning
+  betas: [0.9, 0.95]
+  eps: 1e-8
+  
+lr_scheduler:
+  _component_: torchtune.training.lr_schedulers.get_cosine_schedule_with_warmup
+  num_warmup_steps: 100
+  
+  
+# Loss function
+loss:
+  _component_: torch.nn.CrossEntropyLoss
+  
+# Training Configuration
+gradient_clipping: 1.0
+
+# Evaluation - Updated to use NousResearch/hermes-function-calling-v1
+eval_every_n_epochs: 1
+eval_dataset:
+  _component_: torchtune.datasets.chat_dataset
+  source: NousResearch/hermes-function-calling-v1
+  name: func_calling_singleturn  # Using the same configuration for evaluation
+  split: train
+  conversation_column: conversations  # The correct column name in hermes dataset
+  conversation_style: sharegpt
+  train_on_input: False
+
+# Memory and Performance Optimizations
+enable_activation_checkpointing: True
+compile: True  # PyTorch 2.0 compilation for speed
+dtype: bf16  # Use bfloat16 for H100 efficiency
+
+# Output and Logging
+output_dir: /tmp/lora_finetune_output
+metric_logger:
+  _component_: torchtune.training.metric_logging.WandBLogger
+  project: llama3_lora
+  entity: null  # Set your W&B entity if needed
+  
+log_every_n_steps: 2
+log_peak_memory_stats: True
+
+# Checkpointing
+save_every_n_epochs: 1
+checkpoint_every_n_steps: 5
