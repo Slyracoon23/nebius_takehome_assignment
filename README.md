@@ -9,6 +9,10 @@ As part of the application process for the AI ML specialist Customer Solution Ar
 1. **Exercise 1**: LLM fine-tuning solution for a potential customer's PoC
 2. **Exercise 2**: Internal solution for testing GPU clusters
 
+## Demo Walkthrough
+
+📹 **[Watch the solution walkthrough video](https://youtu.be/cLJHAJt8IlQ)** - A detailed explanation of both exercises and their implementations.
+
 ## Exercise 1: LLM Fine-tuning for Customer PoC
 
 ### Background
